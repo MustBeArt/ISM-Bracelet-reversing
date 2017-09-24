@@ -1,0 +1,134 @@
+Notes on ISM-band LED Bracelet Analysis
+2017-09-23 Paul Williamson
+
+An initial observation of the transmissions of the manufacturer's controller (which bears no brand or model number marking) was made with Gqrx. The frequency was determined to be in the neighborhood of 433.85 MHz. It was also observed that the controller would transmit when any button was pushed, and it would also transmit autonomously after a few seconds if no buttons were pushed.
+
+Data was captured on 2017-09-14, received with a NOOelec RTL-SDR using the following command line on a MacBook Air (Peuta):
+	  rtl_sdr -f 433850000 -s 1000000 -g 20 blet_ook.cu8
+That means a center frequency of 433.85 MHZ, sample rate of 1 MHz, and gain of 20 somethings. This was just a first attempt to collect some data for analysis, so no record was made of which buttons were pushed on the controller. 
+
+The output file format was converted for use by GNU Radio using the following command line:
+	rtlsdr-to-gqrx blet_ook.cu8 blet_ook.cfile
+where the program rtlsdr-to-gqrx was taken from this gist:
+	https://gist.github.com/DrPaulBrewer/917f990cc0a51f7febb5
+
+The carrier was found at an offset of about +60 kHz from that center frequency, so the actual carrier frequency was 433.91 MHz. There was also a 15 dB weaker carrier seen at an offset of -177 kHz (about 235 kHz below the main carrier), and another one 30 dB weaker at twice that offset. Much weaker responses were seen at other frequencies, including at a positive offset of about 235 kHz. Need to check with a better receiver where the signal(s) actually is/are. I'm guessing these are just spurs, probably in the transmitter.
+
+Signal appears to be a carrier amplitude modulated 100% at about 235 kHz and then on-off keyed with a PWM encoding. The time quantum is about 340 microseconds, and each symbol is four quanta long, consisting of either 1 on and 3 off (I'll call that a 0) or 3 on and 1 off (I'll call that a 1).
+
+Side note: getting these times from the WX GUI Scope Sink was unreliable. It gave me all sorts of wrong scalings of time. I used the Qt GUI Time Sink to measure the durations.
+
+I counted 84 cycles of the amplitude modulation in a 0 symbol (one-quantum short pulse). That's approximately consistent with the time and frequency figures above. There's some uncertainty in these numbers.
+
+If we decimate by 170 (half of 340) we should see approximately 2 samples/quantum, which is enough to resolve the PWM. The flowgraph does this, and outputs the results to a file for post-processing.
+
+The Python script reads the file and summarizes the messages. The messages come in bursts of eight, and are mostly 25 bits long. The last message of the burst is sometimes 24 bits. The intra-burst interval is about 60 samples or 10+ ms. The inter-burst interval is long and arbitrary-looking, and presumably corresponds to the interval between button pushes on the controller combined with autonomous transmissions by the controller.
+
+We've captured 15 full bursts, and the beginning of another one.
+
+These are the distinct data patterns we saw in these bursts:
+    (first)                    (last)
+    v                          v
+A = 00000001 01010101 00000011 0
+B = 00000001 01010101 10100011 0
+C = 00000001 01010101 00001100 0
+D = 00000001 01010101 00001111 0
+E = 00000001 01010101 00110000 0
+F = 00000001 01010101 11110000 0
+
+at t=20346 samples:
+	five copies of pattern A
+	two copies of pattern B
+	one copy of pattern B shortened by a bit
+
+at t=22659:
+	exactly the same
+
+at t=25110:
+	eight copies of pattern B
+
+at t=27178:
+	five copies of pattern C
+	three copies of pattern B
+
+at t=29453:
+	five copies of pattern C
+	two copies of pattern B
+	one copy of pattern B shortened by a bit
+
+at t=33419:
+	five copies of pattern D
+	two copies of pattern B
+	one copy of pattern B shortened by a bit
+
+at t=36110:
+	exactly the same
+
+at t=40588:
+	five copies of pattern E
+	two copies of pattern B
+	one copy of pattern B shortened by a bit
+
+at t=42656:
+	exactly the same
+
+at t=50168:
+	five copies of pattern F
+	three copies of pattern B
+
+at t=52416
+	seven copies of pattern B
+	one copy of pattern B shortened by a bit
+
+at t=66248:
+	exactly the same
+
+at t=68592:
+	five copies of pattern F
+	two copies of pattern B
+	one copy of pattern B shortened by a bit
+
+at t=82036: (13444 samples later, ~2.3 seconds)
+	eight copies of pattern B
+
+at t=95868: (13832 samples later)
+	eight copies of pattern B
+
+at t=109699: (13831 samples later)
+	two copies of pattern B
+	end of file.
+
+Or in summary,
+20346 AAAAABBB-
+22659 AAAAABBB-
+25110 BBBBBBBB
+27178 CCCCCBBB
+29453 CCCCCBBB-
+33419 DDDDDBBB-
+36110 DDDDDBBB-
+40588 EEEEEBBB-
+42656 EEEEEBBB-
+50168 FFFFFBBB
+52416 BBBBBBBB-
+(2.3 seconds)
+66248 BBBBBBBB-
+68592 FFFFFBBB-
+(2.3 seconds)
+82036 BBBBBBBB
+(2.3 seconds)
+95868 BBBBBBBB
+(2.3 seconds)
+109699 BB...
+
+
+Speculation, subject to more data collection (with known button pushes!):
+
+* The first two octets of every burst is a fixed preamble.
+
+* The third octet of each burst carries data.
+
+* Pattern B means "stay alive" and nothing more, and is to be sent after an idle time of about 2.3 seconds if nothing else is happening.
+
+* The last bit is always 0 or dropped; it is probably not significant. It might just be the result of sloppy timing when turning off the transmitter.
+
+* Data payloads are repeated five times and followed by three keep-alives.
